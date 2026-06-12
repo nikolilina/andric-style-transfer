@@ -56,7 +56,7 @@ def generate(model, vocab, sentence: str, device: str,
 if __name__ == "__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    model, vocab = load_model("data/best_model.pt", device)
+    model, vocab = load_model("data/best_model_300ep.pt", device)
     print("Model učitan uspešno!")
     print(f"Veličina rečnika: {len(vocab.word2idx)}")
 

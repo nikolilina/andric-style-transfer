@@ -14,7 +14,7 @@ from src.model import Transformer
 CONFIG = {
     "data_path": "data/andric_style_transfer_dataset101.csv",
     "batch_size": 16,
-    "num_epochs": 100,
+    "num_epochs": 300,
     "learning_rate": 0.0001,
     "weight_decay": 0.01,
     "d_model": 256,
@@ -111,7 +111,7 @@ for epoch in range(CONFIG["num_epochs"]):
             "optimizer_state_dict": optimizer.state_dict(),
             "loss": best_loss,
             "vocab": dataset.vocab,
-        }, "data/best_model.pt")
+        }, "data/best_model_300ep.pt")
 
     if (epoch + 1) % 10 == 0:
         print(f"Epoha {epoch+1}/{CONFIG['num_epochs']} | Loss: {avg_loss:.4f}")
@@ -123,11 +123,11 @@ import matplotlib.pyplot as plt
 
 plt.figure(figsize=(10, 6))
 plt.plot(range(1, CONFIG["num_epochs"] + 1), loss_history, color="steelblue", linewidth=2)
-plt.title("Loss kroz epohe — Baseline (101 par)", fontsize=14)
+plt.title("Loss kroz epohe — Eksperiment 2 (101 par, 300 epoha)", fontsize=14)
 plt.xlabel("Epoha")
 plt.ylabel("Loss")
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig("data/loss_baseline.png", dpi=150)
+plt.savefig("data/loss_experiment2.png", dpi=150)
 plt.show()
 print("Graf sačuvan: data/loss_baseline.png")
