@@ -1,4 +1,4 @@
-# Istraživački dnevnik — Stilski transfer teksta u duhu Ive Andrića
+# Istraživački dnevnik - Stilski transfer teksta u duhu Ive Andrića
 
 ---
 
@@ -109,7 +109,7 @@ dropout=0.1, batch_size=16, lr=0.0001, AdamW, 100 epoha, dataset: 101 par.
 | 90    | 1.5895 |
 | 100   | 1.2341 |
 
-Graf: `data/loss_baseline.png`
+![Kriva greške — baseline trening](data/loss_baseline.png)
 
 **Zapažanje o krivoj greške:** Loss opada postepeno i bez naglih skokova ili
 zastoja tokom svih 100 epoha. Pad je gotovo linearan u poslednjih 60-70
