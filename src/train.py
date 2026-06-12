@@ -73,6 +73,7 @@ criterion = nn.CrossEntropyLoss(ignore_index=0)
 
 # ── Trening petlja ──
 best_loss = float("inf")
+loss_history = []
 
 for epoch in range(CONFIG["num_epochs"]):
     model.train()
@@ -99,6 +100,7 @@ for epoch in range(CONFIG["num_epochs"]):
         total_loss += loss.item()
 
     avg_loss = total_loss / len(dataloader)
+    loss_history.append(avg_loss)
 
     # Čuvamo samo najbolji model
     if avg_loss < best_loss:
@@ -115,3 +117,17 @@ for epoch in range(CONFIG["num_epochs"]):
         print(f"Epoha {epoch+1}/{CONFIG['num_epochs']} | Loss: {avg_loss:.4f}")
 
 print(f"Trening završen! Najbolji loss: {best_loss:.4f}")
+
+# ── Graf lossa ──
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(10, 6))
+plt.plot(range(1, CONFIG["num_epochs"] + 1), loss_history, color="steelblue", linewidth=2)
+plt.title("Loss kroz epohe — Baseline (101 par)", fontsize=14)
+plt.xlabel("Epoha")
+plt.ylabel("Loss")
+plt.grid(True, alpha=0.3)
+plt.tight_layout()
+plt.savefig("data/loss_baseline.png", dpi=150)
+plt.show()
+print("Graf sačuvan: data/loss_baseline.png")
