@@ -1,4 +1,4 @@
-# Istraživački dnevnik - Stilski transfer teksta u duhu Ive Andrića
+# Istraživački dnevnik — Stilski transfer teksta u duhu Ive Andrića
 
 ---
 
@@ -10,10 +10,7 @@ podsećaju na prozu Ive Andrića — bogate epitetima, metaforama, filozofskim
 tonom i karakteristično dugim, slojevitim rečenicama.
 
 Model se trenira od nule, na sopstvenom, ručno kreiranom datasetu, bez
-korišćenja gotovih, već istreniranih jezičkih modela. Fokus nije na
-numerički savršenom rezultatu, već na razumevanju procesa: kako model uči,
-gde greši, zašto greši, i kako se ponašanje menja sa promenom parametara i
-količine podataka.
+korišćenja gotovih, već istreniranih jezičkih modela. 
 
 ---
 
@@ -173,6 +170,143 @@ predmet narednih eksperimenata.
 
 ---
 
-## Eksperiment 2 — (popuniti nakon treninga)
+## Eksperiment 2 — Produženi trening (101 par, 300 epoha)
 
-*(rezervisano za sledeći eksperiment)*
+**Cilj eksperimenta:** Isti model i isti dataset kao u Eksperimentu 1, ali sa
+3x većim brojem epoha (300 umesto 100), kako bi se ispitalo da li greška
+nastavlja da opada, da li dolazi do stagnacije, i kako produženo treniranje
+utiče na kvalitet generisanog teksta.
+
+**Konfiguracija:** identična kao u Eksperimentu 1, osim broja epoha
+(300 umesto 100).
+
+**Rezultati treninga (loss kroz epohe):**
+
+| Epoha | Loss   |
+|-------|--------|
+| 100   | 1.2282 |
+| 150   | 0.3470 |
+| 200   | 0.1399 |
+| 250   | 0.0724 |
+| 300   | 0.0444 |
+
+![Kriva greške — Eksperiment 2 (300 epoha)](data/loss_experiment2.png)
+
+**Zapažanje o krivoj greške:** Za razliku od Eksperimenta 1, gde je pad
+lossa bio gotovo linearan, ovde se vidi izrazito brz pad nakon epohe 100
+(sa 1.23 na manje od 0.05 do epohe 300), nakon čega kriva počinje da se
+ravna, ali ne dostiže potpunu stagnaciju do kraja treninga.
+
+**Generisanje — primeri:**
+
+| Ulaz (neutralna rečenica)     | Izlaz modela (skraćeno) |
+|--------------------------------|--------------|
+| Pada kiša na grad.             | svi su mi ljudi i te kako potrebni. svi, od one starice koja me je slast. ona daje i pri svemu tome često se svojoj lepoti, u stvari, ja samo ono što je dobro ni u nama iščezava a tek poneki vršak i stihijskom i prohteva. |
+| Čovek hoda ulicom.              | dvaput u životu čovek je izložen jakom iskušenju da suviše govori o sebi. prvo je mladićko doba, sa njegovom bujnošću i nemirima svake vrste, a drugo staračko doba, sa manje ili više izrazitim i mrači kad ležu oblaci će ti najbolje kazati. |
+| Sunce zalazi iza brda.           | jer, šta su sitne muke i odricanja koja hoda od mene. |
+
+**Analiza izlaza:**
+
+- **Pozitivno (na prvi pogled):**
+  - Rečenice su gramatički znatno ispravnije nego u Eksperimentu 1 — postoji
+    jasan subjekat, predikat, slaganje po rodu/broju/padežu.
+  - Tekst zvuči "andrićevski" po tonu, ritmu i izboru reči.
+
+- **Negativno — ključan nalaz:**
+  - Provera nad datasetom je pokazala da veći delovi generisanog teksta
+    (posebno odgovor za "Čovek hoda ulicom.") odgovaraju **direktno
+    rečenicama iz dataseta**, koje su tokom 300 epoha naučene gotovo napamet.
+  - Izlaz je i dalje slabo povezan sa konkretnim sadržajem ulazne rečenice —
+    model ne "prevodi" ulaz, već **prepoznaje da treba da generiše
+    "andrićevski" tekst** i onda reprodukuje deo neke od 101 poznatih
+    rečenica koja mu je u tom trenutku najbliža po internoj reprezentaciji.
+
+**Zaključak — kompromis između koherentnosti i originalnosti:**
+
+Eksperimenti 1 i 2 pokazuju jasan **trade-off**:
+
+- **Eksperiment 1** (loss ≈ 1.23): nekoherentan, ali tekst je "svež" — model
+  kombinuje reči na nove načine, iako bez gramatičke ispravnosti.
+- **Eksperiment 2** (loss ≈ 0.04): gramatički koherentan, ali ne zato što je
+  model naučio **opšti stil** koji može primeniti na nov sadržaj, nego zato
+  što je **prekomerno prilagođen (overfit)** na 101 primer i u velikoj meri
+  reprodukuje viđene rečenice.
+
+Veoma nizak loss (ispod ~0.1) na datasetu ove veličine je dakle **upozoravajući
+signal**, ne poželjan ishod - što je važan nalaz za dalje eksperimente.
+
+**Sledeći koraci:**
+1. **Eksperiment 3:** Proširiti dataset (cilj: ~200 parova) — veći broj
+   primera bi trebalo da smanji sposobnost modela da prosto "pamti" čitave
+   rečenice, i da ga prisili da uči opštije obrasce.
+2. Razmotriti **regularizaciju** (veći dropout, jači weight decay) i/ili
+   **rano zaustavljanje treninga (early stopping)** na osnovu praćenja
+   trenutka kada loss postane "previše nizak" u odnosu na veličinu dataseta.
+3. Dugoročno: razmotriti subword tokenizaciju kao način da model generalizuje bolje sa ograničenom
+   količinom podataka.
+
+
+## Tehnički nalazi između eksperimenata — Early Stopping i SentencePiece tokenizacija
+
+### Early Stopping
+
+Early stopping je tehnika koja automatski zaustavlja trening kada model
+prestane da napreduje — umesto da fiksno treniramo 100 ili 300 epoha,
+model sam "odlučuje" kada je dovoljno. Implementacija je jednostavna:
+pratimo funkciju greške kroz epohe i ako se ne poboljša određeni broj
+uzastopnih epoha (tzv. patience), trening se prekida.
+
+Međutim, early stopping ima smisla samo ako pratimo grešku na podacima
+koje model **nije video tokom treninga** — tzv. validacioni skup. Ako
+pratimo grešku samo na podacima kojima smo trenirali, model uvek može
+da nastavi da "pamti" te iste primere, pa greška nastavlja polako da
+opada sve do kraja treninga bez ikakvog zastoja. Tačno to se desilo u
+našem slučaju: sa 101 parom rečenica, model nikad nije dostigao
+stagnaciju jer je uvek mogao da bolje zapamti viđene primere.
+
+Pravo rešenje bi bilo podeliti dataset na deo za trening (~80%) i deo
+za validaciju (~20%) — ali sa 101 parom to bi značilo da model trenira
+na svega ~80 primera, što bi dodatno pogoršalo već ograničene rezultate.
+Stoga smo odlučili da early stopping ostavimo kao tehniku za kasniju
+fazu, nakon proširivanja dataseta.
+
+### SentencePiece tokenizacija sa Unigram algoritmom
+
+Naš originalni tokenizer radi na nivou celih reči — svaka reč dobija
+jedinstveni broj. To ima ozbiljan nedostatak za srpski jezik: "čovek",
+"čoveka", "čoveku", "čoveče" su sve različiti tokeni, iako dele isti
+koren i značenje. Model mora svaki oblik da nauči zasebno, što zahteva
+puno primera.
+
+SentencePiece je sofisticiraniji pristup koji deli reči na manje,
+smislene delove — tzv. podreči. Na primer, "nesrećnom", "nesrećna" i
+"nesrećnih" bi svi delili zajednički deo "nesreć", što modelu omogućava
+da uči morfologiju jezika sa manje primera. Ovaj pristup koriste veliki
+modeli poput LLaMA, T5 i Gemini, posebno za jezike sa bogatom
+morfologijom kao što je srpski.
+
+Pokušali smo da treniramo SentencePiece model sa Unigram algoritmom
+na našem datasetu. Isprobali smo dve veličine rečnika:
+
+- **vocab_size=500:** tokenizacija je bila previše gruba — reč "Pada"
+  razlagana je na četiri zasebna tokena: `['▁', 'P', 'a', 'da']`,
+  što je gore od word-level pristupa.
+- **vocab_size=1000:** delimično poboljšanje, ali "Pada" je i dalje
+  ostajalo razloženo na sitne delove umesto da bude jedan token.
+
+Uzrok je jednostavan: da bi SentencePiece "naučio" da je "Pada" česta
+i smislena celina, mora je videti dovoljno puta u korpusu. Sa svega
+202 rečenice (101 par × 2 strane), većina reči se pojavljuje premalo
+puta da bi algoritam mogao da proceni njihovu važnost. Rezultat su
+tokeni na nivou karaktera ili slogova, umesto smislenih podreči.
+
+Mogli smo pokušati da zaobiđemo ovaj problem na više načina (npr.
+korišćenjem već istreniranog višejezičnog SentencePiece modela umesto
+treniranja od nule), ali s obzirom da je proširivanje dataseta ionako
+neophodan sledeći korak, odlučili smo da obe tehnike — early stopping
+i SentencePiece — ostavimo za fazu nakon skaliranja. Tada će imati
+pravi smisao i dati merljive rezultate.
+
+**Zaključak:** oba tehnička poboljšanja koja smo pokušali ukazuju na
+isti temeljni problem — nedovoljno podataka. Ovo dodatno potvrđuje
+neophodnost Eksperimenta 3: proširivanje dataseta.

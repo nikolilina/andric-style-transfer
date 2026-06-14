@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.nn.utils.rnn import pad_sequence
+import matplotlib.pyplot as plt
 
 import sys
 import os
@@ -22,6 +23,7 @@ CONFIG = {
     "d_ff": 1024,
     "num_layers": 3,
     "dropout": 0.1,
+    "patience": 20,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
 }
 
@@ -31,7 +33,6 @@ print(f"Koristimo uređaj: {CONFIG['device']}")
 # ── Collate funkcija ──
 def collate_fn(batch):
     src_batch, tgt_batch = zip(*batch)
-
     src_padded = pad_sequence(
         [torch.tensor(s) for s in src_batch],
         batch_first=True,
@@ -58,6 +59,7 @@ print(f"Broj parova: {len(dataset)}")
 print(f"Broj batcha po epohi: {len(dataloader)}")
 print(f"Veličina rečnika: {len(dataset.vocab)}")
 
+
 # ── Model, optimizer, loss ──
 model = Transformer(
     vocab_size=len(dataset.vocab),
@@ -68,12 +70,18 @@ model = Transformer(
     dropout=CONFIG["dropout"],
 ).to(CONFIG["device"])
 
-optimizer = torch.optim.AdamW(model.parameters(), lr=CONFIG["learning_rate"], weight_decay=0.01)
+optimizer = torch.optim.AdamW(
+    model.parameters(),
+    lr=CONFIG["learning_rate"],
+    weight_decay=CONFIG["weight_decay"]
+)
 criterion = nn.CrossEntropyLoss(ignore_index=0)
+
 
 # ── Trening petlja ──
 best_loss = float("inf")
 loss_history = []
+patience_counter = 0
 
 for epoch in range(CONFIG["num_epochs"]):
     model.train()
@@ -87,7 +95,6 @@ for epoch in range(CONFIG["num_epochs"]):
         tgt_output = tgt[:, 1:]
 
         output = model(src, tgt_input)
-
         output = output.reshape(-1, len(dataset.vocab))
         tgt_output = tgt_output.reshape(-1)
         loss = criterion(output, tgt_output)
@@ -102,32 +109,38 @@ for epoch in range(CONFIG["num_epochs"]):
     avg_loss = total_loss / len(dataloader)
     loss_history.append(avg_loss)
 
-    # Čuvamo samo najbolji model
     if avg_loss < best_loss:
         best_loss = avg_loss
+        patience_counter = 0
         torch.save({
             "epoch": epoch + 1,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "loss": best_loss,
             "vocab": dataset.vocab,
-        }, "data/best_model_300ep.pt")
+        }, "data/best_model_es.pt")
+    else:
+        patience_counter += 1
 
     if (epoch + 1) % 10 == 0:
-        print(f"Epoha {epoch+1}/{CONFIG['num_epochs']} | Loss: {avg_loss:.4f}")
+        print(f"Epoha {epoch+1}/{CONFIG['num_epochs']} | Loss: {avg_loss:.4f} | Patience: {patience_counter}/{CONFIG['patience']}")
+
+    if patience_counter >= CONFIG["patience"]:
+        print(f"\nEarly stopping — loss se nije poboljšao {CONFIG['patience']} epoha.")
+        print(f"Trening zaustavljen u epohi {epoch+1}.")
+        break
 
 print(f"Trening završen! Najbolji loss: {best_loss:.4f}")
 
-# ── Graf lossa ──
-import matplotlib.pyplot as plt
 
+# ── Graf lossa ──
 plt.figure(figsize=(10, 6))
-plt.plot(range(1, CONFIG["num_epochs"] + 1), loss_history, color="steelblue", linewidth=2)
-plt.title("Loss kroz epohe — Eksperiment 2 (101 par, 300 epoha)", fontsize=14)
+plt.plot(range(1, len(loss_history) + 1), loss_history, color="steelblue", linewidth=2)
+plt.title("Loss kroz epohe — Early Stopping (101 par)", fontsize=14)
 plt.xlabel("Epoha")
 plt.ylabel("Loss")
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig("data/loss_experiment2.png", dpi=150)
+plt.savefig("data/loss_early_stopping.png", dpi=150)
 plt.show()
-print("Graf sačuvan: data/loss_baseline.png")
+print("Graf sačuvan: data/loss_early_stopping.png")
