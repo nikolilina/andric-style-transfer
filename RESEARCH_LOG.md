@@ -310,3 +310,68 @@ pravi smisao i dati merljive rezultate.
 **Zaključak:** oba tehnička poboljšanja koja smo pokušali ukazuju na
 isti temeljni problem — nedovoljno podataka. Ovo dodatno potvrđuje
 neophodnost Eksperimenta 3: proširivanje dataseta.
+
+
+### Ažuriranje — SentencePiece na 350 parova
+
+Tokenizer retreniran na 350 parova pokazuje delimično poboljšanje — "kiša" i
+"grad" su sada pojedinačni tokeni, ali "Pada" je i dalje razloženo na karaktere.
+Zaključak ostaje isti: za kvalitetnu subword tokenizaciju srpskog potrebno je
+nekoliko hiljada rečenica. U sledećoj fazi koristimo već istrenirani
+višejezični tokenizer koji poznaje srpsku morfologiju.
+
+## Eksperiment 3 — mT5 tokenizer (350 parova, 300 epoha)
+
+**Cilj:** Ispitati uticaj prelaska sa word-level tokenizacije na istrenirani
+višejezični subword tokenizer (mT5), uz istovremeno skaliranje dataseta sa
+101 na 350 parova.
+
+**Konfiguracija:** identična arhitektura kao u prethodnim eksperimentima,
+mT5 tokenizer sa kompaktnim rečnikom od 3145 tokena (umesto 250100),
+350 parova, 300 epoha, bez train/val splita.
+
+**Rezultati treninga (loss kroz epohe):**
+
+| Epoha | Loss   |
+|-------|--------|
+| 100   | 0.9660 |
+| 150   | 0.2766 |
+| 200   | 0.1049 |
+| 250   | 0.0530 |
+| 300   | 0.0319 |
+
+![Kriva greške — mT5, 300 epoha, 350 pari](data/loss_mt5.png)
+
+**Zapažanje o krivoj greške:** Loss opada konzistentno i sporije nego u
+Eksperimentu 2 — model duže ostaje u korisnoj zoni učenja, što je
+pozitivan signal. Patience se aktivira tek oko epohe 190, što potvrđuje
+da veći dataset usporava memorisanje.
+
+**Generisanje — primeri:**
+
+| Ulaz | Izlaz |
+|------|-------|
+| Pada kiša na grad. | ? So bem  disb- As:t mcomo naan: I m: b!k) vcibs hs):a to b Ag in dium –u-:it b tos-blun?op na dio – ( m (i dcd  dea in). |
+| Čovek hoda ulicom. | ,nob  S d,ancp b v ( to c toc (an! nal Aui cp ing I to d Srn)sal to bipcomi ( debu? d-?hpterh vm-s de v sauo d di  b?: S! un e) mbnpi uncoml v-t? d ser tor:r b
+ |
+| Sunce zalazi iza brda. | I Ah)u A? sa.lsnu.ads! der. |
+
+**Analiza:**
+
+Generisanje je lošije nego u word-level eksperimentima, iako je loss
+sličan. Uzrok nije loš model — uzrok je kombinacija dva faktora:
+
+1. **mT5 subword tokenizacija** deli srpske reči na delove koji nisu
+   intuitivni (`▁ki` + `ša` umesto `kiša`). Model mora da nauči ne samo
+   stilski transfer nego i kako da rekonstruiše validne srpske subword
+   sekvence, što je znatno teži zadatak.
+
+2. **Nedostatak train/val splita** — bez validacionog skupa early stopping
+   se ne aktivira smisleno, pa model i dalje teži memorisanju. Sa subword
+   tokenizacijom, memorisanje je teže (više tokena po rečenici), ali
+   generalizacija nije naučena.
+
+**Zaključak:** mT5 tokenizer zahteva ili znatno više podataka ili pravi
+train/val split sa early stoppingom da bi dao smislene rezultate.
+Sledeći korak je dodavanje sintetičkih parova (351-550) i implementacija
+pravog train/val splita.
