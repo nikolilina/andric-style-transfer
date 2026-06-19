@@ -1,44 +1,111 @@
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
-class MultiHeadAttention(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, dropout: float = 0.1):
+# ── RoPE ──────────────────────────────────────────────────────────────────────
+class RotaryPositionalEncoding(nn.Module):
+    """Rotary Positional Encoding (RoPE) — rotira Q i K vektore umesto
+    da dodaje pozicijski vektor na embedding. Bolja generalizacija na
+    duže sekvence. Koriste ga LLaMA, Mistral i sl."""
+
+    def __init__(self, d_k: int, max_len: int = 512):
         super().__init__()
-        # d_model mora biti deljiv sa num_heads
+        # Frekvencije za rotaciju — formula iz originalnog RoPE rada
+        theta = 1.0 / (10000 ** (torch.arange(0, d_k, 2).float() / d_k))
+        self.register_buffer("theta", theta)
+        self.max_len = max_len
+
+    def _get_cos_sin(self, seq_len: int, device):
+        positions = torch.arange(seq_len, device=device).float()
+        freqs = torch.outer(positions, self.theta)
+        return torch.cos(freqs), torch.sin(freqs)
+
+    def _rotate(self, x, cos, sin):
+        d = x.shape[-1]
+        x1 = x[..., :d // 2]
+        x2 = x[..., d // 2:]
+        rotated = torch.cat([x1 * cos - x2 * sin,
+                             x1 * sin + x2 * cos], dim=-1)
+        return rotated
+
+    def forward(self, q, k):
+        # q i k mogu imati različite dužine (cross-attention!)
+        q_len = q.shape[2]
+        k_len = k.shape[2]
+
+        cos_q, sin_q = self._get_cos_sin(q_len, q.device)
+        cos_k, sin_k = self._get_cos_sin(k_len, k.device)
+
+        # Broadcast na (1, 1, seq_len, d_k/2)
+        cos_q = cos_q.unsqueeze(0).unsqueeze(0)
+        sin_q = sin_q.unsqueeze(0).unsqueeze(0)
+        cos_k = cos_k.unsqueeze(0).unsqueeze(0)
+        sin_k = sin_k.unsqueeze(0).unsqueeze(0)
+
+        return self._rotate(q, cos_q, sin_q), self._rotate(k, cos_k, sin_k)
+
+
+# ── GQA ───────────────────────────────────────────────────────────────────────
+class GroupedQueryAttention(nn.Module):
+    """Grouped Query Attention (GQA) — više Q glava deli iste K i V matrice
+    po grupama. Manji broj parametara i brže generisanje. Koristi ga LLaMA 2/3.
+
+    num_heads     = broj Q glava (npr. 4)
+    num_kv_heads  = broj K/V glava (npr. 2) — mora deliti num_heads
+    """
+
+    def __init__(self, d_model: int, num_heads: int, num_kv_heads: int,
+                 dropout: float = 0.1):
+        super().__init__()
         assert d_model % num_heads == 0
+        assert num_heads % num_kv_heads == 0
 
         self.d_model = d_model
         self.num_heads = num_heads
-        self.d_k = d_model // num_heads  # dimenzija po headu
+        self.num_kv_heads = num_kv_heads
+        self.num_groups = num_heads // num_kv_heads
+        self.d_k = d_model // num_heads
 
-        # Linearne projekcije za Q, K, V i izlaz
-        self.W_q = nn.Linear(d_model, d_model)
-        self.W_k = nn.Linear(d_model, d_model)
-        self.W_v = nn.Linear(d_model, d_model)
+        # Q ima num_heads projekcija, K i V samo num_kv_heads
+        self.W_q = nn.Linear(d_model, num_heads * self.d_k)
+        self.W_k = nn.Linear(d_model, num_kv_heads * self.d_k)
+        self.W_v = nn.Linear(d_model, num_kv_heads * self.d_k)
         self.W_o = nn.Linear(d_model, d_model)
 
+        self.rope = RotaryPositionalEncoding(self.d_k)
         self.dropout = nn.Dropout(dropout)
 
-    def scaled_dot_product_attention(self, Q, K, V, mask=None):
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
+    def forward(self, Q, K, V, mask=None):
+        batch = Q.size(0)
+
+        # Projekcija
+        q = self.W_q(Q).view(batch, -1, self.num_heads, self.d_k).transpose(1, 2)
+        k = self.W_k(K).view(batch, -1, self.num_kv_heads, self.d_k).transpose(1, 2)
+        v = self.W_v(V).view(batch, -1, self.num_kv_heads, self.d_k).transpose(1, 2)
+
+        # RoPE na Q i K
+        q, k = self.rope(q, k)
+
+        # Proširi K i V na num_heads ponavljanjem po grupama
+        k = k.repeat_interleave(self.num_groups, dim=1)
+        v = v.repeat_interleave(self.num_groups, dim=1)
+
+        # Scaled dot-product attention
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.d_k)
         if mask is not None:
             scores = scores.masked_fill(mask == 0, float("-inf"))
         attn_weights = torch.softmax(scores, dim=-1)
         attn_weights_dropped = self.dropout(attn_weights)
-        return torch.matmul(attn_weights_dropped, V), attn_weights
+        x = torch.matmul(attn_weights_dropped, v)
 
-    def forward(self, Q, K, V, mask=None):
-        batch_size = Q.size(0)
-        Q = self.W_q(Q).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
-        K = self.W_k(K).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
-        V = self.W_v(V).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
-        x, attn_weights = self.scaled_dot_product_attention(Q, K, V, mask)
-        x = x.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
+        # Spoji glave
+        x = x.transpose(1, 2).contiguous().view(batch, -1, self.d_model)
         return self.W_o(x), attn_weights
 
 
+# ── FeedForward ───────────────────────────────────────────────────────────────
 class FeedForward(nn.Module):
     def __init__(self, d_model: int, d_ff: int, dropout: float = 0.1):
         super().__init__()
@@ -53,38 +120,15 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model: int, max_len: int = 512, dropout: float = 0.1):
-        super().__init__()
-        self.dropout = nn.Dropout(dropout)
-
-        # Matrica pozicijskih kodova
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len).unsqueeze(1).float()
-        div_term = torch.exp(
-            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
-        )
-
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-
-        pe = pe.unsqueeze(0)
-        self.register_buffer("pe", pe)
-
-    def forward(self, x):
-        x = x + self.pe[:, : x.size(1)]
-        return self.dropout(x)
-
-
+# ── Encoder ───────────────────────────────────────────────────────────────────
 class EncoderLayer(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1):
+    def __init__(self, d_model: int, num_heads: int, num_kv_heads: int,
+                 d_ff: int, dropout: float = 0.1):
         super().__init__()
-        self.attention = MultiHeadAttention(d_model, num_heads, dropout)
+        self.attention = GroupedQueryAttention(d_model, num_heads, num_kv_heads, dropout)
         self.feed_forward = FeedForward(d_model, d_ff, dropout)
-
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
-
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, mask=None):
@@ -96,19 +140,35 @@ class EncoderLayer(nn.Module):
         return x
 
 
-class DecoderLayer(nn.Module):
-    def __init__(self, d_model: int, num_heads: int, d_ff: int, dropout: float = 0.1):
+class Encoder(nn.Module):
+    def __init__(self, vocab_size: int, d_model: int, num_heads: int,
+                 num_kv_heads: int, d_ff: int, num_layers: int, dropout: float = 0.1):
         super().__init__()
-        # Self-attention: dekoder gleda svoju sopstvenu rečenicu
-        self.self_attention = MultiHeadAttention(d_model, num_heads, dropout)
-        # Cross-attention: dekoder gleda enkoder (neutralnu rečenicu)
-        self.cross_attention = MultiHeadAttention(d_model, num_heads, dropout)
-        self.feed_forward = FeedForward(d_model, d_ff, dropout)
+        self.embedding = nn.Embedding(vocab_size, d_model, padding_idx=0)
+        self.layers = nn.ModuleList([
+            EncoderLayer(d_model, num_heads, num_kv_heads, d_ff, dropout)
+            for _ in range(num_layers)
+        ])
+        self.norm = nn.LayerNorm(d_model)
 
+    def forward(self, x, mask=None):
+        x = self.embedding(x)
+        for layer in self.layers:
+            x = layer(x, mask)
+        return self.norm(x)
+
+
+# ── Decoder ───────────────────────────────────────────────────────────────────
+class DecoderLayer(nn.Module):
+    def __init__(self, d_model: int, num_heads: int, num_kv_heads: int,
+                 d_ff: int, dropout: float = 0.1):
+        super().__init__()
+        self.self_attention = GroupedQueryAttention(d_model, num_heads, num_kv_heads, dropout)
+        self.cross_attention = GroupedQueryAttention(d_model, num_heads, num_kv_heads, dropout)
+        self.feed_forward = FeedForward(d_model, d_ff, dropout)
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
         self.norm3 = nn.LayerNorm(d_model)
-
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, encoder_output, src_mask=None, tgt_mask=None):
@@ -124,45 +184,22 @@ class DecoderLayer(nn.Module):
 
         ff_output = self.feed_forward(self.norm3(x))
         x = x + self.dropout(ff_output)
-
         return x, cross_attn_weights
-
-
-class Encoder(nn.Module):
-    def __init__(self, vocab_size: int, d_model: int, num_heads: int,
-                 d_ff: int, num_layers: int, dropout: float = 0.1):
-        super().__init__()
-        self.embedding = nn.Embedding(vocab_size, d_model, padding_idx=0)
-        self.positional_encoding = PositionalEncoding(d_model, dropout=dropout)
-        self.layers = nn.ModuleList([
-            EncoderLayer(d_model, num_heads, d_ff, dropout)
-            for _ in range(num_layers)
-        ])
-        self.norm = nn.LayerNorm(d_model)
-
-    def forward(self, x, mask=None):
-        x = self.embedding(x)
-        x = self.positional_encoding(x)
-        for layer in self.layers:
-            x = layer(x, mask)
-        return self.norm(x)
 
 
 class Decoder(nn.Module):
     def __init__(self, vocab_size: int, d_model: int, num_heads: int,
-                 d_ff: int, num_layers: int, dropout: float = 0.1):
+                 num_kv_heads: int, d_ff: int, num_layers: int, dropout: float = 0.1):
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, d_model, padding_idx=0)
-        self.positional_encoding = PositionalEncoding(d_model, dropout=dropout)
         self.layers = nn.ModuleList([
-            DecoderLayer(d_model, num_heads, d_ff, dropout)
+            DecoderLayer(d_model, num_heads, num_kv_heads, d_ff, dropout)
             for _ in range(num_layers)
         ])
         self.norm = nn.LayerNorm(d_model)
 
     def forward(self, x, encoder_output, src_mask=None, tgt_mask=None):
         x = self.embedding(x)
-        x = self.positional_encoding(x)
         cross_attentions = []
         for layer in self.layers:
             x, cross_attn = layer(x, encoder_output, src_mask, tgt_mask)
@@ -170,24 +207,26 @@ class Decoder(nn.Module):
         return self.norm(x), cross_attentions
 
 
+# ── Transformer ───────────────────────────────────────────────────────────────
 class Transformer(nn.Module):
     def __init__(self, vocab_size: int, d_model: int = 256, num_heads: int = 4,
-                 d_ff: int = 1024, num_layers: int = 3, dropout: float = 0.1):
+                 num_kv_heads: int = 2, d_ff: int = 1024, num_layers: int = 3,
+                 dropout: float = 0.1):
         super().__init__()
-        self.encoder = Encoder(vocab_size, d_model, num_heads, d_ff, num_layers, dropout)
-        self.decoder = Decoder(vocab_size, d_model, num_heads, d_ff, num_layers, dropout)
+        self.encoder = Encoder(vocab_size, d_model, num_heads, num_kv_heads,
+                               d_ff, num_layers, dropout)
+        self.decoder = Decoder(vocab_size, d_model, num_heads, num_kv_heads,
+                               d_ff, num_layers, dropout)
         self.output_projection = nn.Linear(d_model, vocab_size)
 
     def make_src_mask(self, src, pad_idx=0):
-        # Maska za PAD tokene u ulaznoj rečenici
         return (src != pad_idx).unsqueeze(1).unsqueeze(2)
 
     def make_tgt_mask(self, tgt, pad_idx=0):
-        # Maska za PAD tokene
         pad_mask = (tgt != pad_idx).unsqueeze(1).unsqueeze(2)
         seq_len = tgt.size(1)
-        # Kauzalna maska — dekoder ne sme da vidi buduće reči
-        causal_mask = torch.tril(torch.ones(seq_len, seq_len)).bool()
+        causal_mask = torch.tril(torch.ones(seq_len, seq_len,
+                                            device=tgt.device)).bool()
         return pad_mask & causal_mask
 
     def forward(self, src, tgt):
@@ -200,14 +239,12 @@ class Transformer(nn.Module):
         return self.output_projection(decoder_output), cross_attentions
 
 
-# PROVERA:
+# ── Provera ───────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    vocab_size = 2266
+    vocab_size = 3531
     model = Transformer(vocab_size=vocab_size)
-
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Broj parametara: {total_params:,}")
-
     src = torch.randint(1, vocab_size, (2, 10))
     tgt = torch.randint(1, vocab_size, (2, 15))
     output, _ = model(src, tgt)

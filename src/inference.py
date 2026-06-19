@@ -90,9 +90,11 @@ if __name__ == "__main__":
     print(f"Veličina rečnika: {vocab_size}")
 
     test_sentences = [
-        "Pada kiša na grad.",
-        "Čovek hoda ulicom.",
+        "Ljubav izvlači dobre osobine čoveka.",
+        "Noć izaziva strah različitog intenziteta.",
+        "Sposobnost zaboravljanja meri čovekovu snagu.",
         "Sunce zalazi iza brda.",
+        "Dete trči kroz park.",
     ]
 
     print("\n--- Generisanje ---")
