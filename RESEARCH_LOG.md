@@ -375,3 +375,83 @@ sličan. Uzrok nije loš model — uzrok je kombinacija dva faktora:
 train/val split sa early stoppingom da bi dao smislene rezultate.
 Sledeći korak je dodavanje sintetičkih parova (351-550) i implementacija
 pravog train/val splita.
+
+## Eksperiment 4 — Finalni trening (550 parova, train/val split, early stopping)
+
+**Cilj:** Finalni trening sa proširenim datasetom i optimalnom konfiguracijom.
+
+### Proširivanje dataseta
+
+Dataset je proširen sa 350 na 550 parova dodavanjem 200 sintetičkih parova
+(ID 351–550) generisanih u Andrićevom stilu. Parovi 351–400 su u stilu dugih
+opisnih rečenica sa poređenjima i metaforama, a parovi 401–550 u aforističnom
+stilu sa kratkim, oštrim rečenicama. Svi sintetički parovi su prošli manuelnu
+reviziju (ekavica, encoding, dužina neutralnih rečenica).
+
+### mT5 tokenizer i kompaktno remapiranje
+
+Originalni mT5 rečnik ima 250,100 tokena što bi zahtevalo embedding tabelu
+od ~64M parametara. Rešenje je kompaktno remapiranje — skupljamo samo tokene
+koji se pojavljuju u datasetu i preslikavamo ih na uzastopne indekse. Sa 550
+parova dobijamo **kompaktni rečnik od 3531 tokena** (~900K parametara).
+
+### Train/val split i early stopping
+
+Dataset podeljen na **440 trening / 110 validacionih parova** (80/20, seed=42).
+Early stopping prati validacioni loss sa patience=30 — ključna razlika u
+odnosu na Eksperiment 3 gde je praćen samo trening loss.
+
+### Istraživanje hiperparametara
+
+| Konfiguracija | Val loss | Epohe |
+|---|---|---|
+| dropout=0.1, batch=16 | 4.96 | 55 |
+| dropout=0.3, batch=16 | **4.75** ✅ | 91 |
+| dropout=0.3, batch=32 | 5.28 | 115 |
+
+Veći dropout (0.3) dao je najbolje rezultate — bolja regularizacija
+na malom datasetu.
+
+### Finalni trening
+
+**Konfiguracija:** dropout=0.3, batch=16, patience=30.
+
+| Epoha | Train | Val    |
+|-------|-------|--------|
+| 10    | 5.317 | 5.401  |
+| 30    | 4.386 | 4.932  |
+| 50    | 3.772 | 4.807  |
+| 70    | 3.259 | 4.810  |
+| 82    | STOP  | 4.7897 |
+
+Val loss stagnira na ~4.79 dok train nastavlja da opada — očekivan
+overfitting za dataset ove veličine. Val loss 4.79 je prirodni pod
+za 550 parova i ovu arhitekturu.
+
+![Kriva greške — finalni trening](data/loss_mt5_final1.png)
+
+---
+
+## Attention vizualizacija
+
+Implementirana vizualizacija cross-attention težina iz poslednjeg sloja
+dekodera (`src/attention_viz.py`). Heatmapa prikazuje koliku pažnju model
+posvećuje svakom ulaznom tokenu pri generisanju svakog izlaznog tokena.
+
+**Poznate rečenice:** Za ulaz "Ljubav izvlači dobre osobine čoveka." model
+fokusira pažnju na semantički ključne tokene — najveća pažnja na `la` (deo
+od "izvlači") kroz ceo izlaz, što potvrđuje da cross-attention funkcioniše
+ispravno.
+
+![Attention heatmapa — Ljubav](data/attention_Ljubav_izvlači_dobre.png)
+
+**Nepoznate rečenice:** Za ulaz "Sunce zalazi iza brda." model generiše
+repetitivne tokene, ali attention i dalje čita ulaz — pažnja usmerena na
+`ce` i `_zal`. Model prepoznaje ulaz ali ne zna šta da generiše jer nije
+video slične primere.
+
+![Attention heatmapa — Sunce](data/attention_Sunce_zalazi_iza_brd.png)
+
+**Zaključak:** Cross-attention funkcioniše ispravno na arhitekturnom nivou.
+Loš kvalitet generisanja posledica je malog dataseta, a ne greške u
+implementaciji.

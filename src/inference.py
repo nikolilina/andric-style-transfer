@@ -53,7 +53,7 @@ def generate(model, tokenizer, old_to_new, new_to_old, sentence: str,
     with torch.no_grad():
         for _ in range(max_len):
             tgt = torch.tensor([generated]).to(device)
-            output = model(src, tgt)
+            output, _ = model(src, tgt)
 
             logits = output[0, -1, :]
 

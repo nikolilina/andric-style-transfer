@@ -23,7 +23,7 @@ CONFIG = {
     "num_heads": 4,
     "d_ff": 1024,
     "num_layers": 3,
-    "dropout": 0.1,
+    "dropout": 0.3,
     "patience": 30,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
 }
@@ -52,7 +52,10 @@ dataset = AndricDatasetMT5(CONFIG["data_path"])
 
 val_size = int(0.2 * len(dataset))
 train_size = len(dataset) - val_size
-train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+generator = torch.Generator().manual_seed(42)
+train_dataset, val_dataset = random_split(
+    dataset, [train_size, val_size], generator=generator
+)
 
 dataloader = DataLoader(
     train_dataset,
@@ -103,14 +106,15 @@ def handle_interrupt(sig, frame):
                  color="steelblue", linewidth=2, label="Train loss")
         plt.plot(range(1, len(val_loss_history) + 1), val_loss_history,
                  color="tomato", linewidth=2, label="Val loss")
-        plt.title("Loss kroz epohe — mT5, 550 parova, early stopping", fontsize=14)
+        plt.title("Loss kroz epohe — mT5, 550 parova, dropout=0.3",
+                  fontsize=14)
         plt.xlabel("Epoha")
         plt.ylabel("Loss")
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig("data/loss_mt5_val.png", dpi=150)
-        print("Graf sačuvan: data/loss_mt5_val.png")
+        plt.savefig("data/loss_mt5_final_interrupt.png", dpi=150)
+        print("Graf sačuvan: data/loss_mt5_final_interrupt.png")
     sys.exit(0)
 
 signal.signal(signal.SIGINT, handle_interrupt)
@@ -131,7 +135,7 @@ for epoch in range(CONFIG["num_epochs"]):
         tgt_input = tgt[:, :-1]
         tgt_output = tgt[:, 1:]
 
-        output = model(src, tgt_input)
+        output, _ = model(src, tgt_input)
         output = output.reshape(-1, dataset.vocab_size)
         tgt_output = tgt_output.reshape(-1)
         loss = criterion(output, tgt_output)
@@ -154,7 +158,7 @@ for epoch in range(CONFIG["num_epochs"]):
             tgt = tgt.to(CONFIG["device"])
             tgt_input = tgt[:, :-1]
             tgt_output = tgt[:, 1:]
-            output = model(src, tgt_input)
+            output, _ = model(src, tgt_input)
             output = output.reshape(-1, dataset.vocab_size)
             tgt_output = tgt_output.reshape(-1)
             val_loss = criterion(output, tgt_output)
@@ -199,11 +203,12 @@ plt.plot(range(1, len(loss_history) + 1), loss_history,
          color="steelblue", linewidth=2, label="Train loss")
 plt.plot(range(1, len(val_loss_history) + 1), val_loss_history,
          color="tomato", linewidth=2, label="Val loss")
-plt.title("Loss kroz epohe — mT5, 550 parova, early stopping", fontsize=14)
+plt.title("Loss kroz epohe — final",
+          fontsize=14)
 plt.xlabel("Epoha")
 plt.ylabel("Loss")
 plt.legend()
 plt.grid(True, alpha=0.3)
 plt.tight_layout()
-plt.savefig("data/loss_mt5_val.png", dpi=150)
-print("Graf sačuvan: data/loss_mt5_val.png")
+plt.savefig("data/loss_mt5_final1.png", dpi=150)
+print("Graf sačuvan: data/loss_mt5_final1.png")

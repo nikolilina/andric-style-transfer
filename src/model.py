@@ -22,32 +22,21 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def scaled_dot_product_attention(self, Q, K, V, mask=None):
-        # Osnovna formula: softmax(QK^T / sqrt(d_k)) * V
         scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
-
         if mask is not None:
             scores = scores.masked_fill(mask == 0, float("-inf"))
-
         attn_weights = torch.softmax(scores, dim=-1)
-        attn_weights = self.dropout(attn_weights)
-
-        return torch.matmul(attn_weights, V)
+        attn_weights_dropped = self.dropout(attn_weights)
+        return torch.matmul(attn_weights_dropped, V), attn_weights
 
     def forward(self, Q, K, V, mask=None):
         batch_size = Q.size(0)
-
-        # Projekcija i podela na heads
         Q = self.W_q(Q).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
         K = self.W_k(K).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
         V = self.W_v(V).view(batch_size, -1, self.num_heads, self.d_k).transpose(1, 2)
-
-        # Attention
-        x = self.scaled_dot_product_attention(Q, K, V, mask)
-
-        # Spajanje heads nazad
+        x, attn_weights = self.scaled_dot_product_attention(Q, K, V, mask)
         x = x.transpose(1, 2).contiguous().view(batch_size, -1, self.d_model)
-
-        return self.W_o(x)
+        return self.W_o(x), attn_weights
 
 
 class FeedForward(nn.Module):
@@ -99,15 +88,11 @@ class EncoderLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, mask=None):
-        # Pre-LN: normalizacija PRE attention/feedforward, stabilniji za male datasete
-
         norm_x = self.norm1(x)
-        attn_output = self.attention(norm_x, norm_x, norm_x, mask)
+        attn_output, _ = self.attention(norm_x, norm_x, norm_x, mask)
         x = x + self.dropout(attn_output)
-
         ff_output = self.feed_forward(self.norm2(x))
         x = x + self.dropout(ff_output)
-
         return x
 
 
@@ -127,21 +112,20 @@ class DecoderLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, encoder_output, src_mask=None, tgt_mask=None):
-        # Korak 1: Self-attention (dekoder gleda šta je do sad generisao)
         norm_x = self.norm1(x)
-        attn_output = self.self_attention(norm_x, norm_x, norm_x, tgt_mask)
+        attn_output, _ = self.self_attention(norm_x, norm_x, norm_x, tgt_mask)
         x = x + self.dropout(attn_output)
 
-        # Korak 2: Cross-attention (dekoder gleda enkoder — neutralnu rečenicu)
         norm_x2 = self.norm2(x)
-        attn_output = self.cross_attention(norm_x2, encoder_output, encoder_output, src_mask)
+        attn_output, cross_attn_weights = self.cross_attention(
+            norm_x2, encoder_output, encoder_output, src_mask
+        )
         x = x + self.dropout(attn_output)
 
-        # Korak 3: FeedForward
         ff_output = self.feed_forward(self.norm3(x))
         x = x + self.dropout(ff_output)
 
-        return x
+        return x, cross_attn_weights
 
 
 class Encoder(nn.Module):
@@ -179,9 +163,11 @@ class Decoder(nn.Module):
     def forward(self, x, encoder_output, src_mask=None, tgt_mask=None):
         x = self.embedding(x)
         x = self.positional_encoding(x)
+        cross_attentions = []
         for layer in self.layers:
-            x = layer(x, encoder_output, src_mask, tgt_mask)
-        return self.norm(x)
+            x, cross_attn = layer(x, encoder_output, src_mask, tgt_mask)
+            cross_attentions.append(cross_attn)
+        return self.norm(x), cross_attentions
 
 
 class Transformer(nn.Module):
@@ -208,8 +194,10 @@ class Transformer(nn.Module):
         src_mask = self.make_src_mask(src)
         tgt_mask = self.make_tgt_mask(tgt)
         encoder_output = self.encoder(src, src_mask)
-        decoder_output = self.decoder(tgt, encoder_output, src_mask, tgt_mask)
-        return self.output_projection(decoder_output)
+        decoder_output, cross_attentions = self.decoder(
+            tgt, encoder_output, src_mask, tgt_mask
+        )
+        return self.output_projection(decoder_output), cross_attentions
 
 
 # PROVERA:
@@ -222,6 +210,6 @@ if __name__ == "__main__":
 
     src = torch.randint(1, vocab_size, (2, 10))
     tgt = torch.randint(1, vocab_size, (2, 15))
-    output = model(src, tgt)
+    output, _ = model(src, tgt)
     print(f"Oblik izlaza: {output.shape}")
     print("Model radi ispravno!")
